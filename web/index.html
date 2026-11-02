@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#16181d" />
+  <title>Cluster Tiers</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Sign in -->
+  <section id="view-login" class="view" hidden>
+    <div class="login-card">
+      <h1>Cluster Tiers</h1>
+      <p class="muted">DashReliant processing tiers</p>
+      <form id="login-form">
+        <input id="email" type="email" placeholder="Email" autocomplete="email" required />
+        <input id="password" type="password" placeholder="Password" autocomplete="current-password" required minlength="6" />
+        <button type="submit" class="btn primary">Sign in</button>
+        <button type="button" id="signup-btn" class="btn ghost">Create account</button>
+      </form>
+      <p id="login-msg" class="muted small"></p>
+    </div>
+  </section>
+
+  <!-- App -->
+  <div id="app" hidden>
+    <header class="topbar">
+      <span class="brand">Cluster Tiers</span>
+      <button id="signout" class="link">Sign out</button>
+    </header>
+
+    <!-- Scan -->
+    <section id="view-scan" class="view">
+      <label class="capture">
+        <input id="photo" type="file" accept="image/*" capture="environment" hidden />
+        <img id="preview" alt="" hidden />
+        <span id="capture-hint">
+          <svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><path fill="currentColor" d="M9 3 7.2 5H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.2L15 3H9Zm3 5a5 5 0 1 1 0 10 5 5 0 0 1 0-10Zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg>
+          Take a photo of the cluster or its part number
+        </span>
+      </label>
+      <input id="pn-hint" type="text" placeholder="…or type the part number" autocapitalize="characters" />
+      <button id="lookup" class="btn primary big">Look up</button>
+
+      <div id="result" hidden></div>
+    </section>
+
+    <!-- List / tier editor -->
+    <section id="view-list" class="view" hidden>
+      <div class="list-tools">
+        <input id="search" type="search" placeholder="Search clusters or part numbers" />
+        <div id="tier-filter" class="chips"></div>
+      </div>
+      <ul id="cluster-list" class="cluster-list"></ul>
+      <button id="add-cluster" class="btn ghost">+ Add cluster by hand</button>
+    </section>
+
+    <nav class="tabbar">
+      <button data-view="scan" class="active">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M4 4h5v2H6v3H4V4Zm11 0h5v5h-2V6h-3V4ZM4 15h2v3h3v2H4v-5Zm14 3v-3h2v5h-5v-2h3ZM8 11h8v2H8z"/></svg>
+        Scan
+      </button>
+      <button data-view="list">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M4 5h2v2H4V5Zm4 0h12v2H8V5Zm-4 6h2v2H4v-2Zm4 0h12v2H8v-2Zm-4 6h2v2H4v-2Zm4 0h12v2H8v-2Z"/></svg>
+        Clusters
+      </button>
+    </nav>
+  </div>
+
+  <!-- Edit sheet -->
+  <dialog id="editor">
+    <form method="dialog" id="editor-form">
+      <h2 id="editor-title">Edit cluster</h2>
+      <div id="tier-picker" class="tier-picker"></div>
+      <label>Bin label <input id="ed-label" required /></label>
+      <label>Make <input id="ed-make" /></label>
+      <label>Model(s) <input id="ed-models" /></label>
+      <div class="row">
+        <label>From year <input id="ed-y1" type="number" inputmode="numeric" /></label>
+        <label>To year <input id="ed-y2" type="number" inputmode="numeric" /></label>
+      </div>
+      <label>Part numbers <span class="muted small">(comma separated)</span> <input id="ed-pns" autocapitalize="characters" /></label>
+      <label>Notes <textarea id="ed-notes" rows="2"></textarea></label>
+      <div class="row end">
+        <button value="cancel" class="btn ghost" formnovalidate>Cancel</button>
+        <button id="ed-save" value="save" class="btn primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" role="status" hidden></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
