@@ -35,7 +35,7 @@ create table public.clusters (
 create index clusters_part_numbers_idx on public.clusters using gin (part_numbers);
 
 create or replace function public.touch_updated_at() returns trigger
-language plpgsql as $$
+language plpgsql set search_path = '' as $$
 begin
   new.updated_at := now();
   return new;
