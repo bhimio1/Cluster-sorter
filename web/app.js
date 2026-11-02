@@ -12,11 +12,48 @@ let photo = null;        // { base64, type }
 let filterTier = null;
 
 // ---------------- Auth ----------------
+let recovering = false; // true while the user is setting a new password from a reset email
+
 async function boot() {
+  // A password-reset link lands here with "type=recovery" in the URL.
+  recovering = /type=recovery/.test(location.hash);
+  sb.auth.onAuthStateChange((event, s) => {
+    if (event === "PASSWORD_RECOVERY") recovering = true;
+    if (recovering && s) return showNewPassword(s.user.email);
+    showApp(!!s);
+  });
   const { data: { session } } = await sb.auth.getSession();
-  showApp(!!session);
-  sb.auth.onAuthStateChange((_e, s) => showApp(!!s));
+  if (recovering && session) showNewPassword(session.user.email);
+  else showApp(!!session);
 }
+
+function showNewPassword(email) {
+  $("#app").hidden = true;
+  $("#view-login").hidden = false;
+  $("#login-form").hidden = true;
+  $("#newpw-form").hidden = false;
+  $("#newpw-email").textContent = email;
+  $("#login-msg").textContent = "";
+}
+
+$("#newpw-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const { error } = await sb.auth.updateUser({ password: $("#newpw").value });
+  if (error) return ($("#login-msg").textContent = error.message);
+  recovering = false;
+  history.replaceState(null, "", location.pathname);
+  $("#newpw-form").hidden = true;
+  $("#login-form").hidden = false;
+  toast("Password saved");
+  showApp(true);
+});
+
+$("#forgot-btn").addEventListener("click", async () => {
+  const email = $("#email").value.trim();
+  if (!email) return ($("#login-msg").textContent = "Type your email above first.");
+  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+  $("#login-msg").textContent = error ? error.message : "Check your email for a link to set a new password.";
+});
 
 async function showApp(signedIn) {
   $("#view-login").hidden = signedIn;

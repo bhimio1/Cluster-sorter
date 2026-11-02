@@ -20,6 +20,12 @@
         <input id="password" type="password" placeholder="Password" autocomplete="current-password" required minlength="6" />
         <button type="submit" class="btn primary">Sign in</button>
         <button type="button" id="signup-btn" class="btn ghost">Create account</button>
+        <button type="button" id="forgot-btn" class="link small">Forgot password?</button>
+      </form>
+      <form id="newpw-form" hidden>
+        <p>Choose a new password for <strong id="newpw-email"></strong></p>
+        <input id="newpw" type="password" placeholder="New password" autocomplete="new-password" required minlength="6" />
+        <button type="submit" class="btn primary">Save password</button>
       </form>
       <p id="login-msg" class="muted small"></p>
     </div>
