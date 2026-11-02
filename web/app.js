@@ -32,7 +32,11 @@ $("#login-form").addEventListener("submit", async (e) => {
 $("#signup-btn").addEventListener("click", async () => {
   const email = $("#email").value, password = $("#password").value;
   if (!email || password.length < 6) return ($("#login-msg").textContent = "Enter an email and a password of 6+ characters.");
-  const { data, error } = await sb.auth.signUp({ email, password });
+  // Send the confirmation link back to this page, not Supabase's default localhost URL.
+  const { data, error } = await sb.auth.signUp({
+    email, password,
+    options: { emailRedirectTo: location.origin + location.pathname },
+  });
   $("#login-msg").textContent = error ? error.message : data.session ? "" : "Check your email to confirm, then sign in.";
 });
 $("#signout").addEventListener("click", () => sb.auth.signOut());
