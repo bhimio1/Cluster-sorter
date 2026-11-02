@@ -103,30 +103,78 @@ async function shrink(file, max = 1568) {
   return { base64: btoa(bin), type: "image/jpeg" };
 }
 
-$("#lookup").addEventListener("click", async () => {
+// ---- Model choice (remembered on this phone) ----
+const MODELS = [
+  { key: "haiku", name: "Haiku" },
+  { key: "sonnet", name: "Sonnet" },
+  { key: "opus", name: "Opus" },
+];
+let model = "haiku";
+try { model = localStorage.getItem("model") || "haiku"; } catch {}
+function drawModelPick() {
+  document.querySelectorAll(".model-pick button").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.model === model)));
+}
+document.querySelectorAll(".model-pick button").forEach((b) =>
+  b.addEventListener("click", () => {
+    model = b.dataset.model;
+    try { localStorage.setItem("model", model); } catch {}
+    drawModelPick();
+  }),
+);
+drawModelPick();
+
+let lastInput = null; // { photo, hint } of the most recent lookup, for "search harder"
+
+$("#lookup").addEventListener("click", () => {
   const hint = $("#pn-hint").value.trim();
   if (!photo && !hint) return toast("Take a photo or type a part number first");
+  lastInput = { photo, hint };
+  runLookup(model);
+});
+
+async function runLookup(modelKey, retryOf) {
   const btn = $("#lookup");
   btn.disabled = true;
   const res = $("#result");
   res.hidden = false;
-  res.innerHTML = `<div class="loading"><div class="spinner"></div>Looking it up…</div>`;
+  const name = MODELS.find((m) => m.key === modelKey)?.name;
+  res.innerHTML = `<div class="loading"><div class="spinner"></div>Looking it up with ${esc(name)}…</div>`;
   try {
+    const { photo: p, hint } = lastInput;
     const { data, error } = await sb.functions.invoke("lookup-cluster", {
-      body: { image_base64: photo?.base64, media_type: photo?.type, part_number_hint: hint || undefined },
+      body: {
+        image_base64: p?.base64, media_type: p?.type, part_number_hint: hint || undefined,
+        model: modelKey, retry_of: retryOf,
+      },
     });
     if (error) {
       let msg = error.message;
       try { msg = (await error.context.json()).error || msg; } catch {}
       throw new Error(msg);
     }
+    if (data.removed_id) {
+      clusters = clusters.filter((c) => c.id !== data.removed_id);
+      renderList();
+    }
     showResult(data);
   } catch (e) {
-    res.innerHTML = `<p><strong>Lookup failed.</strong> ${esc(e.message)}</p>`;
+    res.innerHTML = `<p><strong>Lookup failed.</strong> ${esc(e.message)}</p>${retryButtons(modelKey, retryOf, "Try with")}`;
+    wireRetry(retryOf);
   } finally {
     btn.disabled = false;
   }
-});
+}
+
+// Buttons to re-run the same photo with each bigger model than the one just used.
+function retryButtons(usedKey, retryOf, verb = "Search harder with") {
+  const i = MODELS.findIndex((m) => m.key === usedKey);
+  const bigger = MODELS.slice(i + 1);
+  if (!bigger.length) return "";
+  return `<div class="retry">${bigger.map((m) => `<button type="button" class="btn ghost" data-retry="${m.key}">${verb} ${m.name}</button>`).join("")}</div>`;
+}
+function wireRetry(retryOf) {
+  $("#result").querySelectorAll("[data-retry]").forEach((b) => b.addEventListener("click", () => runLookup(b.dataset.retry, retryOf)));
+}
 
 function factsHtml(id) {
   if (!id) return "";
@@ -150,18 +198,28 @@ function showResult(data) {
         ${data.candidates.map((c) => `<button class="btn ghost" data-pick="${c.id}" style="display:flex;gap:10px;align-items:center;text-align:left">${dot(c.tier, "sm")}<span>${esc(c.label)}</span></button>`).join("")}
         <button class="btn ghost" data-new>None of these — add as E (Unknown)</button>
       </div>
-      ${factsHtml(data.identified)}`;
+      ${factsHtml(data.identified)}
+      ${data.model ? `<p class="muted small" style="margin:0">Not sure? Have a bigger model look:</p>${retryButtons(data.model)}` : ""}`;
     res.querySelectorAll("[data-pick]").forEach((b) => b.addEventListener("click", () => pickCandidate(b.dataset.pick, data.identified)));
     res.querySelector("[data-new]").addEventListener("click", () => addFromIdentified(data.identified));
+    wireRetry();
     return;
   }
-  renderClusterResult(data.cluster, data.status === "added", data.identified);
+  renderClusterResult(data.cluster, data.status === "added", data.identified, data.model);
   upsertLocal(data.cluster);
 }
 
-function renderClusterResult(c, isNew, identified) {
+function renderClusterResult(c, isNew, identified, usedModel) {
   const t = tierOf(c.tier);
   const res = $("#result");
+  // Offer a bigger model when the first one couldn't find it, or wasn't sure of the match.
+  // A new Unknown row is passed along so the retry replaces it instead of duplicating it.
+  let retry = "";
+  if (usedModel && isNew && c.tier === "E") {
+    retry = `<p class="muted small" style="margin:0">Couldn't find it? Search harder:</p>${retryButtons(usedModel)}`;
+  } else if (usedModel && !isNew && identified?.confidence && identified.confidence !== "high") {
+    retry = `<p class="muted small" style="margin:0">Not the right bin? Search harder:</p>${retryButtons(usedModel)}`;
+  }
   res.innerHTML = `
     <div class="result-head">
       ${dot(c.tier)}
@@ -173,14 +231,17 @@ function renderClusterResult(c, isNew, identified) {
     </div>
     <p class="muted small" style="margin:0">${esc(t.description)}</p>
     ${factsHtml(identified)}
+    ${usedModel ? `<p class="muted small" style="margin:0">Looked up with ${esc(MODELS.find((m) => m.key === usedModel)?.name)}</p>` : ""}
+    ${retry}
     <p class="muted small" style="margin:0">Change tier:</p>
     <div class="tier-picker">${tierButtons(c.tier)}</div>`;
   res.querySelectorAll(".tier-btn").forEach((b) =>
     b.addEventListener("click", async () => {
       const updated = await setTier(c.id, b.dataset.code);
-      if (updated) renderClusterResult(updated, isNew, identified);
+      if (updated) renderClusterResult(updated, isNew, identified, usedModel);
     }),
   );
+  wireRetry(isNew && c.tier === "E" ? c.id : undefined);
 }
 
 function tierButtons(selected) {

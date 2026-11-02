@@ -8,6 +8,10 @@ looks it up on the web → the app checks it against your Supabase database.
 - **Could be two bins** (e.g. Ranger 4WD vs Base): asks you to pick.
 - Part numbers get remembered on the matching bin, so the next scan of the
   same number (typed) is instant and free.
+- **Model picker:** Haiku (fast, default), Sonnet (harder), Opus (hardest).
+  If a lookup comes back Unknown or unsure, tap *Search harder with Sonnet/Opus*
+  to re-run the same photo; it replaces the Unknown entry instead of adding a
+  duplicate. The phone remembers your last choice.
 - **Clusters** tab: search, filter by color, tap a cluster to change its tier,
   part numbers, years or notes, or add one by hand.
 
@@ -61,8 +65,8 @@ On the phone, use *Add to Home Screen* and it opens like an app.
 1. The phone shrinks the photo to ≤1568 px JPEG and sends it to the
    `lookup-cluster` function along with any typed part number.
 2. If the typed part number is already saved on a bin, it answers right away.
-3. Otherwise Haiku (`claude-haiku-5-5`) reads the photo, runs up to 4 web
-   searches on the part number, and compares it to every bin in the database
+3. Otherwise the chosen model (`claude-haiku-5-5`, `claude-sonnet-5-5` or
+   `claude-opus-5-5`) reads the photo, runs up to 4 / 6 / 8 web searches, and compares it to every bin in the database
    (make + model + year range + variant). It returns a match, a short list of
    possible bins, or nothing.
 4. No match → a new row is created with tier **E** and `source = 'scan'`.
@@ -73,7 +77,8 @@ Every lookup is also logged in the `scans` table.
 ## Cost
 
 Haiku 5.5 is $0.10 / M input and $0.50 / M output tokens, plus Anthropic's
-per-search web search fee. A lookup is one photo plus a few searches, so it's
+per-search web search fee. Sonnet and Opus cost more per lookup and allow more
+searches, so keep Haiku as the default and step up only for hard ones. A lookup is one photo plus a few searches, so it's
 mostly the search fee. Typed part numbers you've seen before cost nothing.
 
 ## Changing tiers or colors

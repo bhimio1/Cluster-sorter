@@ -43,6 +43,11 @@
         </span>
       </label>
       <input id="pn-hint" type="text" placeholder="…or type the part number" autocapitalize="characters" />
+      <div class="model-pick" role="radiogroup" aria-label="Model">
+        <button type="button" role="radio" data-model="haiku">Haiku<small>Fast</small></button>
+        <button type="button" role="radio" data-model="sonnet">Sonnet<small>Harder</small></button>
+        <button type="button" role="radio" data-model="opus">Opus<small>Hardest</small></button>
+      </div>
       <button id="lookup" class="btn primary big">Look up</button>
 
       <div id="result" hidden></div>

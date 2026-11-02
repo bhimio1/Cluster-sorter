@@ -82,6 +82,18 @@ input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 
 .capture span { display: grid; justify-items: center; gap: 8px; padding: 16px; }
 .capture img { width: 100%; max-height: 340px; object-fit: contain; display: block; }
 
+/* Model picker */
+.model-pick { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; background: var(--surface); padding: 4px; border-radius: 12px; }
+.model-pick button {
+  display: grid; justify-items: center; gap: 1px; padding: 8px 0;
+  background: none; border: 0; border-radius: 9px; color: var(--muted);
+  font: 600 15px/1.2 inherit; cursor: pointer;
+}
+.model-pick small { font-weight: 400; font-size: 11px; }
+.model-pick button[aria-checked="true"] { background: var(--surface-2); color: var(--text); }
+.retry { display: flex; gap: 8px; flex-wrap: wrap; }
+.retry .btn { flex: 1; padding: 10px 12px; font-size: 14px; }
+
 /* Result */
 #result {
   background: var(--surface); border-radius: var(--radius); padding: 18px;

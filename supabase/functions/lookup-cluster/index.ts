@@ -1,5 +1,6 @@
-// lookup-cluster: photo of a cluster or part-number label  →  Claude Haiku
-// identifies it (with web search)  →  match against the clusters table.
+// lookup-cluster: photo of a cluster or part-number label  →  Claude (Haiku by
+// default; Sonnet or Opus on request) identifies it with web search  →  match
+// against the clusters table.
 // Matched: return its tier. Not found: add it as tier E (Purple / Unknown).
 //
 // Secrets (supabase secrets set ...):
@@ -9,7 +10,14 @@
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
-const MODEL = "claude-haiku-5-5";
+// Pick per lookup from the app. Bigger models search more and reason harder,
+// for clusters Haiku can't pin down. Cost and time go up left to right.
+const MODELS: Record<string, { id: string; searches: number }> = {
+  haiku: { id: "claude-haiku-5-5", searches: 4 },
+  sonnet: { id: "claude-sonnet-5-5", searches: 6 },
+  opus: { id: "claude-opus-5-5", searches: 8 },
+};
+const DEFAULT_MODEL = "haiku";
 const UNKNOWN_TIER = "E";
 
 const cors = {
@@ -70,7 +78,13 @@ Deno.serve(async (req) => {
   );
 
   // --- Input ---
-  let body: { image_base64?: string; media_type?: string; part_number_hint?: string };
+  let body: {
+    image_base64?: string;
+    media_type?: string;
+    part_number_hint?: string;
+    model?: string;
+    retry_of?: string; // id of an Unknown row a smaller model just added
+  };
   try {
     body = await req.json();
   } catch {
@@ -80,42 +94,56 @@ Deno.serve(async (req) => {
   if (!body.image_base64 && !hint) {
     return json({ error: "Send a photo or a typed part number" }, 400);
   }
+  const modelKey = body.model && MODELS[body.model] ? body.model : DEFAULT_MODEL;
 
-  const { data: clusters, error: listErr } = await db
+  const { data: all, error: listErr } = await db
     .from("clusters")
-    .select("id,label,make,models,year_start,year_end,part_numbers,tier");
+    .select("id,label,make,models,year_start,year_end,part_numbers,tier,source");
   if (listErr) return json({ error: listErr.message }, 500);
-  const byId = new Map((clusters as Cluster[]).map((c) => [c.id, c]));
+
+  // On a retry, the placeholder the first lookup created must not count as a match.
+  const placeholder = body.retry_of
+    ? (all as (Cluster & { source: string })[]).find(
+      (c) => c.id === body.retry_of && c.source === "scan" && c.tier === UNKNOWN_TIER,
+    )
+    : undefined;
+  const clusters = (all as Cluster[]).filter((c) => c.id !== placeholder?.id);
+  const byId = new Map(clusters.map((c) => [c.id, c]));
 
   // --- Fast path: typed part number we've already seen. No AI call needed. ---
-  if (hint) {
-    const hit = findByPartNumber(clusters as Cluster[], hint);
+  if (hint && !body.retry_of) {
+    const hit = findByPartNumber(clusters, hint);
     if (hit) {
       await logScan(db, hit.id, true, { part_number: hint, via: "part_number_cache" }, user.id);
-      return json({ status: "matched", cluster: hit, identified: { part_number: hint } });
+      return json({ status: "matched", cluster: hit, identified: { part_number: hint }, model: null });
     }
   }
 
-  // --- Ask Haiku ---
+  // --- Ask Claude ---
   let identified: Identified;
   try {
-    identified = await askHaiku(body, hint, clusters as Cluster[]);
+    identified = await askClaude(body, hint, clusters, modelKey);
   } catch (e) {
-    return json({ error: `Lookup failed: ${(e as Error).message}` }, 502);
+    return json({ error: `Lookup failed: ${(e as Error).message}`, model: modelKey }, 502);
   }
 
   // A part number we already know beats the model's guess.
   if (identified.part_number) {
-    const hit = findByPartNumber(clusters as Cluster[], identified.part_number);
+    const hit = findByPartNumber(clusters, identified.part_number);
     if (hit) identified.match_id = hit.id;
   }
+
+  const dropPlaceholder = async () => {
+    if (placeholder) await db.from("clusters").delete().eq("id", placeholder.id);
+  };
 
   // --- Matched an existing bin ---
   const match = identified.match_id ? byId.get(identified.match_id) : undefined;
   if (match) {
+    await dropPlaceholder();
     const updated = await rememberPartNumber(db, match, identified.part_number);
     await logScan(db, match.id, true, identified, user.id);
-    return json({ status: "matched", cluster: updated, identified });
+    return json({ status: "matched", cluster: updated, identified, model: modelKey, removed_id: placeholder?.id });
   }
 
   // --- Could be one of several bins (e.g. Ranger 4WD vs Base): let the user pick ---
@@ -123,31 +151,34 @@ Deno.serve(async (req) => {
     .map((id) => byId.get(id))
     .filter(Boolean) as Cluster[];
   if (candidates.length > 1) {
+    await dropPlaceholder();
     await logScan(db, null, false, identified, user.id);
-    return json({ status: "ambiguous", candidates, identified });
+    return json({ status: "ambiguous", candidates, identified, model: modelKey, removed_id: placeholder?.id });
   }
 
   // --- Not in the database: add it as E / Purple / Unknown ---
-  const label = buildLabel(identified);
-  const { data: created, error: insErr } = await db
-    .from("clusters")
-    .insert({
-      label,
-      make: identified.make,
-      models: identified.model,
-      year_start: identified.year_start,
-      year_end: identified.year_end ?? identified.year_start,
-      part_numbers: identified.part_number ? [identified.part_number.toUpperCase()] : [],
-      tier: UNKNOWN_TIER,
-      notes: identified.description,
-      source: "scan",
-    })
+  // (On a retry, improve the existing Unknown row instead of adding a second one.)
+  const row = {
+    label: buildLabel(identified),
+    make: identified.make,
+    models: identified.model,
+    year_start: identified.year_start,
+    year_end: identified.year_end ?? identified.year_start,
+    part_numbers: identified.part_number ? [identified.part_number.toUpperCase()] : [],
+    tier: UNKNOWN_TIER,
+    notes: identified.description,
+    source: "scan",
+  };
+  const q = placeholder
+    ? db.from("clusters").update(row).eq("id", placeholder.id)
+    : db.from("clusters").insert(row);
+  const { data: created, error: insErr } = await q
     .select("id,label,make,models,year_start,year_end,part_numbers,tier")
     .single();
   if (insErr) return json({ error: insErr.message }, 500);
 
   await logScan(db, created.id, false, identified, user.id);
-  return json({ status: "added", cluster: created, identified });
+  return json({ status: "added", cluster: created, identified, model: modelKey });
 });
 
 // ---------------------------------------------------------------------------
@@ -187,11 +218,13 @@ function buildLabel(i: Identified): string {
   return name || (i.part_number ? `Part ${i.part_number.toUpperCase()}` : "Unidentified cluster");
 }
 
-async function askHaiku(
+async function askClaude(
   body: { image_base64?: string; media_type?: string },
   hint: string,
   clusters: Cluster[],
+  modelKey: string,
 ): Promise<Identified> {
+  const { id: model, searches } = MODELS[modelKey];
   const catalog = clusters.map((c) => ({
     id: c.id,
     label: c.label,
@@ -245,11 +278,11 @@ Finish with ONLY a JSON object, no other text, in exactly this shape:
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 2048,
+        model,
+        max_tokens: 4096,
         system,
         messages,
-        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 4 }],
+        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: searches }],
       }),
     });
     if (!res.ok) throw new Error(`Anthropic API ${res.status}: ${await res.text()}`);
