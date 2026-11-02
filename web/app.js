@@ -4,7 +4,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const FIELDS = "id,label,make,models,year_start,year_end,part_numbers,tier,notes,source,updated_at";
+const FIELDS = "id,label,make,models,year_start,year_end,part_numbers,tier,notes,source,updated_at,unknown_seen,last_seen_at";
 
 let tiers = [];          // [{code,color_name,hex,description,sort_order}]
 let clusters = [];
@@ -98,6 +98,7 @@ function upsertLocal(c) {
   const i = clusters.findIndex((x) => x.id === c.id);
   if (i >= 0) clusters[i] = { ...clusters[i], ...c }; else clusters.push(c);
   clusters.sort((a, b) => a.label.localeCompare(b.label));
+  renderFilter();
   renderList();
 }
 
@@ -268,6 +269,7 @@ function renderClusterResult(c, isNew, identified, usedModel) {
         <p class="result-title">${esc(t.code)} — ${esc(t.color_name)}</p>
         <p class="result-sub">${esc(c.label)}</p>
         ${isNew ? `<span class="badge new">New — added to database</span>` : `<span class="badge">In database</span>`}
+        ${c.tier === "E" && c.unknown_seen > 1 ? `<span class="badge seen">Seen ${c.unknown_seen}×</span>` : ""}
       </div>
     </div>
     <p class="muted small" style="margin:0">${esc(t.description)}</p>
@@ -303,6 +305,10 @@ async function pickCandidate(id, identified) {
     updated = data;
     upsertLocal(updated);
   }
+  if (updated.tier === "E") {
+    const { data } = await sb.rpc("bump_unknown", { p_id: id }).select(FIELDS).maybeSingle();
+    if (data) { updated = data; upsertLocal(updated); }
+  }
   renderClusterResult(updated, false, identified);
 }
 
@@ -315,6 +321,7 @@ async function addFromIdentified(id) {
     label, make: id?.make, models: id?.model, year_start: y1, year_end: y2,
     part_numbers: id?.part_number ? [id.part_number.toUpperCase()] : [],
     tier: "E", notes: id?.description, source: "scan",
+    unknown_seen: 1, last_seen_at: new Date().toISOString(),
   }).select(FIELDS).single();
   if (error) return toast(error.message);
   upsertLocal(data);
@@ -324,7 +331,10 @@ async function addFromIdentified(id) {
 // ---------------- List ----------------
 function renderFilter() {
   const chips = [`<button class="chip ${filterTier ? "" : "active"}" data-t="">All</button>`]
-    .concat(tiers.map((t) => `<button class="chip ${filterTier === t.code ? "active" : ""}" data-t="${t.code}"><i style="background:${t.hex}"></i>${t.code} ${esc(t.color_name)}</button>`));
+    .concat(tiers.map((t) => {
+      const n = clusters.filter((c) => c.tier === t.code).length;
+      return `<button class="chip ${filterTier === t.code ? "active" : ""}" data-t="${t.code}"><i style="background:${t.hex}"></i>${t.code} ${esc(t.color_name)}<span class="count">${n}</span></button>`;
+    }));
   $("#tier-filter").innerHTML = chips.join("");
   $("#tier-filter").querySelectorAll(".chip").forEach((b) =>
     b.addEventListener("click", () => { filterTier = b.dataset.t || null; renderFilter(); renderList(); }),
@@ -340,20 +350,37 @@ function renderList() {
     const hay = [c.label, c.make, c.models, years(c)].join(" ").toLowerCase();
     return hay.includes(q) || (qn.length >= 3 && c.part_numbers.some((p) => p.toLowerCase().replace(/[^a-z0-9]/g, "").includes(qn)));
   });
+  // Purple filter = research queue: most-seen unknowns first, then most recent.
+  if (filterTier === "E") {
+    rows.sort((a, b) => (b.unknown_seen ?? 0) - (a.unknown_seen ?? 0)
+      || String(b.last_seen_at ?? "").localeCompare(String(a.last_seen_at ?? "")));
+  }
+  $("#unknown-hint").hidden = filterTier !== "E" || !rows.length;
   $("#cluster-list").innerHTML = rows.length
     ? rows.map((c) => `
       <li data-id="${c.id}">
         ${dot(c.tier, "sm")}
         <div class="grow">
           <div class="name">${esc(c.label)}</div>
-          <div class="meta">${esc([c.make, years(c)].filter(Boolean).join(" · "))}${c.part_numbers.length ? " · " + esc(c.part_numbers.join(", ")) : ""}</div>
+          <div class="meta">${esc([c.make, years(c), c.part_numbers.join(", ")].filter(Boolean).join(" · "))}</div>
         </div>
-        ${c.source === "scan" && c.tier === "E" ? `<span class="badge new">New</span>` : ""}
+        ${c.tier === "E" ? seenBadge(c) : ""}
       </li>`).join("")
     : `<li class="muted">No clusters match.</li>`;
   $("#cluster-list").querySelectorAll("li[data-id]").forEach((li) => li.addEventListener("click", () => openEditor(li.dataset.id)));
 }
 $("#search").addEventListener("input", renderList);
+
+function seenBadge(c) {
+  const n = c.unknown_seen ?? 0;
+  if (!n) return "";
+  const when = c.last_seen_at ? ago(c.last_seen_at) : "";
+  return `<span class="seen-col"><span class="badge seen">${n}×</span>${when ? `<span class="small muted">${when}</span>` : ""}</span>`;
+}
+function ago(ts) {
+  const d = Math.floor((Date.now() - new Date(ts).getTime()) / 86400000);
+  return d <= 0 ? "today" : d === 1 ? "yesterday" : d < 30 ? `${d}d ago` : new Date(ts).toLocaleDateString();
+}
 $("#add-cluster").addEventListener("click", () => openEditor(null));
 
 // ---------------- Editor ----------------

@@ -19,6 +19,7 @@ const MODELS: Record<string, { id: string; searches: number }> = {
 };
 const DEFAULT_MODEL = "haiku";
 const UNKNOWN_TIER = "E";
+const FIELDS = "id,label,make,models,year_start,year_end,part_numbers,tier,unknown_seen,last_seen_at";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -35,6 +36,8 @@ type Cluster = {
   year_end: number | null;
   part_numbers: string[];
   tier: string;
+  unknown_seen?: number;       // times an Unknown (tier E) cluster has been scanned
+  last_seen_at?: string | null;
 };
 
 type Identified = {
@@ -98,7 +101,7 @@ Deno.serve(async (req) => {
 
   const { data: all, error: listErr } = await db
     .from("clusters")
-    .select("id,label,make,models,year_start,year_end,part_numbers,tier,source");
+    .select(`${FIELDS},source`);
   if (listErr) return json({ error: listErr.message }, 500);
 
   // On a retry, the placeholder the first lookup created must not count as a match.
@@ -114,8 +117,9 @@ Deno.serve(async (req) => {
   if (hint && !body.retry_of) {
     const hit = findByPartNumber(clusters, hint);
     if (hit) {
+      const seen = await countIfUnknown(db, hit);
       await logScan(db, hit.id, true, { part_number: hint, via: "part_number_cache" }, user.id);
-      return json({ status: "matched", cluster: hit, identified: { part_number: hint }, model: null });
+      return json({ status: "matched", cluster: seen, identified: { part_number: hint }, model: null });
     }
   }
 
@@ -141,7 +145,7 @@ Deno.serve(async (req) => {
   const match = identified.match_id ? byId.get(identified.match_id) : undefined;
   if (match) {
     await dropPlaceholder();
-    const updated = await rememberPartNumber(db, match, identified.part_number);
+    const updated = await countIfUnknown(db, await rememberPartNumber(db, match, identified.part_number));
     await logScan(db, match.id, true, identified, user.id);
     return json({ status: "matched", cluster: updated, identified, model: modelKey, removed_id: placeholder?.id });
   }
@@ -156,8 +160,9 @@ Deno.serve(async (req) => {
     return json({ status: "ambiguous", candidates, identified, model: modelKey, removed_id: placeholder?.id });
   }
 
-  // --- Not in the database: add it as E / Purple / Unknown ---
-  // (On a retry, improve the existing Unknown row instead of adding a second one.)
+  // --- Not in the database: add it as E / Purple / Unknown, seen once ---
+  // (On a retry, improve the existing Unknown row instead of adding a second
+  // one; it's the same physical cluster, so its count stays as it was.)
   const row = {
     label: buildLabel(identified),
     make: identified.make,
@@ -171,10 +176,8 @@ Deno.serve(async (req) => {
   };
   const q = placeholder
     ? db.from("clusters").update(row).eq("id", placeholder.id)
-    : db.from("clusters").insert(row);
-  const { data: created, error: insErr } = await q
-    .select("id,label,make,models,year_start,year_end,part_numbers,tier")
-    .single();
+    : db.from("clusters").insert({ ...row, unknown_seen: 1, last_seen_at: new Date().toISOString() });
+  const { data: created, error: insErr } = await q.select(FIELDS).single();
   if (insErr) return json({ error: insErr.message }, 500);
 
   await logScan(db, created.id, false, identified, user.id);
@@ -195,8 +198,15 @@ async function rememberPartNumber(db: ReturnType<typeof createClient>, c: Cluste
   if (n.length < 4 || c.part_numbers.some((p) => normPN(p) === n)) return c;
   const part_numbers = [...c.part_numbers, pn.toUpperCase()];
   const { data } = await db.from("clusters").update({ part_numbers }).eq("id", c.id)
-    .select("id,label,make,models,year_start,year_end,part_numbers,tier").single();
+    .select(FIELDS).single();
   return (data as Cluster) ?? { ...c, part_numbers };
+}
+
+// Another sighting of a cluster that's still Unknown: +1 to its count.
+async function countIfUnknown(db: ReturnType<typeof createClient>, c: Cluster): Promise<Cluster> {
+  if (c.tier !== UNKNOWN_TIER) return c;
+  const { data } = await db.rpc("bump_unknown", { p_id: c.id }).select(FIELDS).maybeSingle();
+  return (data as Cluster) ?? c;
 }
 
 async function logScan(

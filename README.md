@@ -14,6 +14,9 @@ looks it up on the web → the app checks it against your Supabase database.
   duplicate. The phone remembers your last choice.
 - **Clusters** tab: search, filter by color, tap a cluster to change its tier,
   part numbers, years or notes, or add one by hand.
+- **Unknown counts:** every time a scan lands on an Unknown, its count goes up.
+  The Purple filter ranks unknowns most-seen first, so you know which to
+  research and tier first.
 
 ```
 web/                      phone web app (plain HTML/JS, no build step)
@@ -69,8 +72,17 @@ On the phone, use *Add to Home Screen* and it opens like an app.
    `claude-opus-5-5`) reads the photo, runs up to 4 / 6 / 8 web searches, and compares it to every bin in the database
    (make + model + year range + variant). It returns a match, a short list of
    possible bins, or nothing.
-4. No match → a new row is created with tier **E** and `source = 'scan'`.
-   These show a purple *New* badge in the list until you tier them.
+4. No match → a new row is created with tier **E** and `source = 'scan'`,
+   counted as seen once.
+5. Every later scan that lands on a cluster that's still Unknown adds one to
+   its count (`unknown_seen`) and updates `last_seen_at`.
+
+## Which unknowns to research first
+
+Clusters tab → tap the **E Purple** filter. Unknowns are listed most-seen
+first, each with how many times it's come through and when it was last seen.
+Research the top ones and give them a tier; once a cluster has a real tier its
+count is no longer shown.
 
 Every lookup is also logged in the `scans` table.
 
